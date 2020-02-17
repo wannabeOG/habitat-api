@@ -91,6 +91,31 @@ _C.RL.DDPPO.train_encoder = True
 # Whether or not to reset the critic linear layer
 _C.RL.DDPPO.reset_critic = True
 # -----------------------------------------------------------------------------
+# IMITATION LEARNING
+# -----------------------------------------------------------------------------
+_C.IMITATION = CN()
+# -----------------------------------------------------------------------------
+# BEHAVIORAL CLONING (BC)
+# -----------------------------------------------------------------------------
+_C.IMITATION.EXPERT = CN()
+_C.IMITATION.EXPERT.mode =  "greedy"
+_C.IMITATION.EXPERT.num_episodes = 100
+_C.IMITATION.EXPERT.split_dataset =  0.8
+_C.IMITATION.EXPERT.record_images = False
+_C.IMITATION.EXPERT.log_file = "expert.log"
+_C.IMITATION.EXPERT.train_path = "data/datasets/expert_trajectories_train"
+_C.IMITATION.EXPERT.val_path = "data/datasets/expert_trajectories_val"
+
+_C.IMITATION.BC = CN()
+_C.IMITATION.BC.batch_size = 64
+_C.IMITATION.BC.shuffle = True
+_C.IMITATION.BC.num_workers = 0
+_C.IMITATION.BC.learning_rate = 0.001
+_C.IMITATION.BC.num_epochs = 25
+_C.IMITATION.BC.weight_decay = 0.01
+_C.IMITATION.BC.eps = 1e-8
+_C.IMITATION.BC.hidden_size = 512
+# -----------------------------------------------------------------------------
 # ORBSLAM2 BASELINE
 # -----------------------------------------------------------------------------
 _C.ORBSLAM2 = CN()

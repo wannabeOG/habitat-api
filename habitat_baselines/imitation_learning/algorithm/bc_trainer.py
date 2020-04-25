@@ -340,10 +340,10 @@ class BCTrainer(BaseRLTrainer):
                                 del sample
 
                             #save checkpoints every 5 epochs
-                            if (epoch!= 0 and (epoch+1)% bc_config.checkpoint_interval == 0):
+                            if (epoch!= 0 and (epoch+1)% bc_config.BC.checkpoint_interval == 0):
                                 self.save_checkpoint(f"checkpoint_{epoch+1}.pth")   
                                 
-                            #Epoch stats 
+                            #Epoch stats
                             epoch_loss = running_loss / size
                             epoch_accuracy = running_corrects/ size
 

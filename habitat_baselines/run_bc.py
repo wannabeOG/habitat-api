@@ -9,7 +9,7 @@ from pathlib import Path
 
 from habitat_baselines.common.baseline_registry import baseline_registry
 from habitat_baselines.config.default import get_config
-from habitat_baselines.imitation_learning.algorithm.bc_trainer_2 import BCTrainer
+from habitat_baselines.imitation_learning.algorithm.bc_trainer import BCTrainer
 #from habitat_baselines.imitation_learning.algorithm.runner_script import runner_function
 from habitat import logger
 

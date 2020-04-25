@@ -4,20 +4,24 @@ import argparse
 import random
 
 import numpy as np
+import os
+from pathlib import Path
 
 from habitat_baselines.common.baseline_registry import baseline_registry
 from habitat_baselines.config.default import get_config
-from habitat_baselines.imitation_learning.algorithm.bc_trainer import BCTrainer
-from habitat_baselines.imitation_learning.algorithm.expert import Expert_Model
+from habitat_baselines.imitation_learning.algorithm.bc_trainer_2 import BCTrainer
+#from habitat_baselines.imitation_learning.algorithm.runner_script import runner_function
+from habitat import logger
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--run-type",
-        choices=["train", "eval", "generate", "validate"],
+        choices=["train", "eval"],
         required=True,
-        help="generate expert trajectories (generate) or run type of the experiment (train or eval or validate)",
+        help="train a policy and validate it's performance on expert trajectories\
+        (train) or evaluate the trained policy in an environment(eval)",
     )
     parser.add_argument(
         "--exp-config",
@@ -30,7 +34,7 @@ def main():
         type=int,
         required=False,
         default=-1,
-        help="checkpoint number required when you are running eval"
+        help="checkpoint number required when you are running eval, default: loads the final trained model"
     )
 
     parser.add_argument(
@@ -56,7 +60,6 @@ def run_exp(exp_config: str, run_type: str, checkpoint_number:int = -1, opts=Non
         None.
     """
     config = get_config(exp_config, opts)
-
     random.seed(config.TASK_CONFIG.SEED)
     np.random.seed(config.TASK_CONFIG.SEED)
 
@@ -67,20 +70,14 @@ def run_exp(exp_config: str, run_type: str, checkpoint_number:int = -1, opts=Non
     config.TASK_CONFIG.SIMULATOR.AGENT_0.SENSORS.append("DEPTH_SENSOR")
     config.freeze()
 
-    if run_type == "generate":
-        expert = Expert_Model(config)
-        expert.generate_expert_trajectory()
-        return
-    
     trainer = BCTrainer(config)
-
+        
     if run_type == "train":
         trainer.train()
+        return
+
     elif run_type == "eval":
-        trainer.eval(checkpoint_number)
-    elif run_type == "validate":
-        trainer.validate(checkpoint_number)
-
-
+        trainer.eval_checkpoint(checkpoint_number)
+    
 if __name__ == "__main__":
     main()

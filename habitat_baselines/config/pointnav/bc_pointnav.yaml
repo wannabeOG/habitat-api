@@ -19,20 +19,21 @@ IMITATION:
     EXPERT:
         mode: "greedy"
         num_episodes: 10
-        split_dataset: 0.9
+        split_dataset: 0.5
         record_images: False
-        train_path: "data/datasets/imitlearn/train/expert_trajectories_train"
-        val_path: "data/datasets/imitlearn/val/expert_trajectories_val"
-        log_file: expert.log
+        iteration_split: 5
+        dataset_path: "data/datasets/imitlearn/{split}/"
+        log_file: train.log
     BC:
         weight_decay: 0.0
         eps: 1e-8
-        num_epochs: 2
+        num_epochs: 4
         batch_size: 16
         learning_rate: 0.001
-        shuffle : True
         num_workers: 0
         hidden_size: 512
+        pin_memory: True
+        checkpoint_interval: 8
 
 
 

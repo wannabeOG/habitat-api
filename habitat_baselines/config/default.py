@@ -99,7 +99,7 @@ _C.IMITATION = CN()
 # -----------------------------------------------------------------------------
 _C.IMITATION.EXPERT = CN()
 _C.IMITATION.EXPERT.mode =  "greedy"
-_C.IMITATION.EXPERT.num_episodes = 100
+_C.IMITATION.EXPERT.num_episodes = -1
 _C.IMITATION.EXPERT.split_dataset =  0.8
 _C.IMITATION.EXPERT.record_images = False
 _C.IMITATION.EXPERT.log_file = "expert.log"
@@ -108,7 +108,7 @@ _C.IMITATION.EXPERT.val_path = "data/datasets/expert_trajectories_val"
 
 _C.IMITATION.BC = CN()
 _C.IMITATION.BC.batch_size = 64
-_C.IMITATION.BC.shuffle = True
+_C.IMITATION.BC.checkpoint_interval = 10
 _C.IMITATION.BC.num_workers = 0
 _C.IMITATION.BC.learning_rate = 0.001
 _C.IMITATION.BC.num_epochs = 25

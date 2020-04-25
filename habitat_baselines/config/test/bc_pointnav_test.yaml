@@ -1,0 +1,41 @@
+BASE_TASK_CONFIG_PATH: "configs/tasks/pointnav.yaml"
+TRAINER_NAME: "bc"
+ENV_NAME: "NavRLEnv"
+SIMULATOR_GPU_ID: 0
+TORCH_GPU_ID: 0
+VIDEO_OPTION: []
+TENSORBOARD_DIR: ""
+VIDEO_DIR: "video_dir"
+TEST_EPISODE_COUNT: 2
+EVAL_CKPT_PATH_DIR: "data/test_checkpoints/bc/bc_checkpoints/ckpt.0.pth"
+NUM_PROCESSES: 1
+SENSORS: ["RGB_SENSOR", "DEPTH_SENSOR"]
+CHECKPOINT_FOLDER: "data/test_checkpoints/bc/bc_checkpoints"
+NUM_UPDATES: 10
+LOG_INTERVAL: 100
+CHECKPOINT_INTERVAL: 1
+
+IMITATION:
+    EXPERT:
+        mode: "greedy"
+        num_episodes: 40
+        split_dataset: 0.8
+        record_images: False
+        iteration_split: 9
+        train_path: "data/datasets/imitlearn/train/expert_trajectories_train"
+        val_path: "data/datasets/imitlearn/val/expert_trajectories_val"
+        log_file: expert.log
+    BC:
+        weight_decay: 0.0
+        eps: 1e-8
+        num_epochs: 4
+        batch_size: 16
+        learning_rate: 0.001
+        shuffle : True
+        num_workers: 0
+        hidden_size: 512
+
+
+
+
+

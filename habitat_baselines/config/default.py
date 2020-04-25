@@ -101,10 +101,8 @@ _C.IMITATION.EXPERT = CN()
 _C.IMITATION.EXPERT.mode =  "greedy"
 _C.IMITATION.EXPERT.num_episodes = -1
 _C.IMITATION.EXPERT.split_dataset =  0.8
-_C.IMITATION.EXPERT.record_images = False
-_C.IMITATION.EXPERT.log_file = "expert.log"
-_C.IMITATION.EXPERT.train_path = "data/datasets/expert_trajectories_train"
-_C.IMITATION.EXPERT.val_path = "data/datasets/expert_trajectories_val"
+_C.IMITATION.EXPERT.log_file = "train.log"
+_C.IMITATION.EXPERT.path = ""
 
 _C.IMITATION.BC = CN()
 _C.IMITATION.BC.batch_size = 64

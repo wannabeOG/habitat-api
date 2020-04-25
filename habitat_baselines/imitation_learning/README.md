@@ -44,7 +44,7 @@ imitation_learning
 1. ***mode***: Can take values ```greedy``` or ```geodesic```. Refers to the mode which the shortest path follower(expert) adopts to pick the best action when interacting with the environment
 1. ***num_episodes***: Number of episodes that the expert will interact with the environment with for
 1. ***split_dataset***: A floating point value between 0 and 1 which decides the number of episodes that will be used to create the training set
-1. ***record_images***: A boolean that if set indicates that you would like to store the images to disk. Setting this flag will then result in the model reading images off the disk on the fly and not load the entire dataset into memory at the same time
+1. ***iteration_split***: Number of episodes that will be used in one generation/training cycle
 1. ***path***: Path where the dataset of expert trajectories (train/val) is stored at. 
 1. ***log_file***: Name of the log file
 
@@ -109,37 +109,15 @@ python -u habitat_baselines/run_test.py --exp-config habitat_baselines/config/po
 Checkpoint number is used to load the model from a specific checkpoint created during the training routine of the policy. If this field is left empty, the final checkpoint is used 
 
 ### Reported Results
-The number of episodes on which I can realistically train the policy on is too less for results to have any significant meaning. The reported results are preliminary results and should be treated as such
-
-Number of training episodes: 45  
-Number of validation episodes: 5  
-Total number of expert episodes: 50  
-
-Model used: Model is loaded from the Checkpoint created after 5 epochs (system became non-responsive in the midst of the training process)
-
-| Metric                    | Value         |
-| -------------------------:|:-------------:| 
-| Average episode reward    | -4.530377     |
-| Average episode success   | 0.000000      |
-| Average episode spl       | 0.000000      |
-
+Will be updated shortly
 
 ### Assumptions and Current Limitations:
-1. The expert agent used to obtain the "correct" behaviour is [shortest path follower][3]. At this particular moment, the expert only uses one GPU to explore the environment, even if there were a possibility for the availability of more sophisticated resources (instead of using a VectorEnv object, I have used a singular instance of the environment specified in a config file). This was necessitated since the expert requires the [goal radius][4] which is set by accessing the attributes of an "env" instance. I ran into issues with the translation of this particular setting to a VectorEnv object, primarily because I couldn't access the attributes of each individual env that made up this VectorEnv object.
-
-1. The expert trajectories have been stored in a .npz archive, an idea similar to the one implemented in the [stable baselines][5] repository. I took this decision primarily due to the fact that having a seperate dataset (in lieu of making modifications to the RolloutStorage class) maintained logical consistency with the idea of reduction of a typical imitation learning problem to the supervised domain wherein the the states (plain observations in this codebase) and the corresponding actions are assumed to be drawn IID.
-
-1. Although the [ExpertDataset][19] can in theory load a lesser number of episodes for training than created, a suitable way to pass this information through the config file needs to be designed, since all the alternatives that I have been able to come up can break thorugh well designed test cases  
-
-1. The [BCtrainer][6] class subclasses the [BaseTrainer][7] class following the instructions laid down in the BaseTrainer class. However certain methods (2 instances [here][8] and [here][9]) used in the [BaseRLTrainer][10] class have been adopted and appropriately modified in order to fully realize my interpretation for this particular algorithm.
-
 1. Aesthetic issues: While using the [habitat logger][11] during the training phase of the policy, the progress bar breaks since the imported logger is initialized with a stream handler, so by default the logger prints the output to the console which breaks the progress bar. One possible solution would be to import HabitatLogger and initialize it with a file_name. This would however not print anything to the console (STDOUT) and just store a record in the log file. At present though, I have gone along by using the standard ```logger.info``` to make a record so this will result in broken progress bars whilst training the policy model on expert trajectories.     
 
 ### References
 1. [Imitation Learning Tutorial][20]  
 1. [Repository for SplitNet][21]
 1. [Stable Baslines Repository][5]
-
 
 [1]:https://pytorch.org/
 [2]:https://github.com/wannabeOG/habitat-api/blob/imitation-learning/habitat_baselines/rl/models/simple_cnn.py

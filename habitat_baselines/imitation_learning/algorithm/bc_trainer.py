@@ -7,6 +7,7 @@ from typing import Dict, List
 import numpy as np
 import time
 from tqdm import tqdm
+import warnings
 
 import torch
 import torch.nn as nn 
@@ -23,288 +24,363 @@ from habitat_baselines.common.utils import (
 from habitat_baselines.common.base_trainer import BaseTrainer, BaseRLTrainer
 from habitat_baselines.common.baseline_registry import baseline_registry
 from habitat_baselines.imitation_learning.algorithm.dataset import ExpertDataset
+from habitat_baselines.imitation_learning.algorithm.expert import Expert_Model
 from habitat_baselines.imitation_learning.algorithm.policy import PointNavBaselinePolicy
+
 from habitat_baselines.common.env_utils import construct_envs
 from habitat_baselines.common.environments import get_env_class
+from habitat.datasets.registration import make_dataset
+
 from habitat_baselines.common.tensorboard_utils import TensorboardWriter
+
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", category=FutureWarning)
+    import tensorflow as tf
+
+
+class ObservationsDict(dict):
+    def pin_memory(self):
+        for k, v in self.items():
+            self[k] = v.pin_memory()
+
+        return self
+
+def collate_fn(batch):
+    r""" A custom collate function used by the dataloaders defined over the iterable dataset
+    """
+    final_list = [[batch[idx][key] for idx in range(len(batch))] for key in batch[0].keys()]
+    
+    actions_batch = torch.stack(final_list[0], dim = 0)
+    depth_batch = torch.stack(final_list[1], dim = 0)
+    pointgoal_with_gps_compass_batch = torch.stack(final_list[2], dim = 0)
+    rgb_batch = torch.stack(final_list[3], dim = 0)
+
+    return ObservationsDict({
+    'action': actions_batch, 
+    'depth': depth_batch, 
+    'pointgoal_with_gps_compass': pointgoal_with_gps_compass_batch,
+    'rgb': rgb_batch
+    })
 
 
 @baseline_registry.register_trainer(name="bc")
-class BCTrainer(BaseTrainer):
-    r"""
-    Trainer class for Behavioral Cloning (BC)
-    """
+class BCTrainer(BaseRLTrainer):
+    r"""A Trainer class for Behavioral Cloning (BC)
 
+    :param config: habitat.Config object. Config file for running the behavioral cloning 
+        algorithm. 
+    :param observation_space: A property of the environment in which the expert trajectories 
+        had been recorded. The observation space records the type of observations unique to 
+        the sensors that the expert had been allowed access to in the generation cycle.
+    :param actionS_space: A property of the agent. The range of actions to which the policy 
+        being learnt by the agent will be limited to. 
+    """
     supported_tasks = ["Nav-v0"]
 
-    def __init__(self, config:Config):
-        super().__init__()
+    def __init__(self,config:Config):
+        super().__init__(config)
         self.agent = None
-        self.envs = None
+        self.env = None
+        self.expert = None
         self.config = config
         self.device = (
             torch.device("cuda", self.config.TORCH_GPU_ID)
             if torch.cuda.is_available()
             else torch.device("cpu")
         )
-
+        
+        logger.add_filehandler(self.config.LOG_FILE)
         if config is not None:
             logger.info(f"config: {config}")
 
-    def _setup_agent(self, config):
+    def _setup_agent(self, 
+        config:Config,
+    ) -> None:
         r"""Initializes an agent and a log file for the problem of PointGoal Navigation
 
-        Args:
-            config: A config file with the relevant params for initializing the agent
-
-        Returns:
-            None
+        :param config: A config file with the relevant params for initializing the agent
+        :return None
         """
-        logger.add_filehandler(self.config.LOG_FILE)
+        
         imitation_config = self.config.IMITATION
 
         self.agent = PointNavBaselinePolicy(
-            observation_space = self.envs.observation_spaces[0],
-            action_space=self.envs.action_spaces[0],
+            observation_space = self.env.observation_space,
+            action_space = self.env.action_space,
             goal_sensor_uuid=self.config.TASK_CONFIG.TASK.GOAL_SENSOR_UUID,
             hidden_size = imitation_config.BC.hidden_size
         )
 
-    def _get_dataloaders(self, bc_config):
-        r"""Creates dataloaders using an instance of the ExpertDataset
+        return 
 
-        Args:
-            bc_config: config node with the relevant params for behavioral cloning
+    def _get_dataloaders_size_dataset(self, 
+        bc_config:Config, 
+        phase:str
+    ) -> List:
+        r"""Creates dataloaders over an instance of the ExpertDataset (initialized 
+        using the phase). The dataloader and the size of this dataset are then returned 
 
-        Returns:
-            dataloaders: dataloaders to load data from the train anf validation sets 
+        :param bc_config: config node with the relevant params for behavioral cloning 
+        :param phase: This variable takes one of the two values ("train", "val") which depends 
+            on the setting the BCtrainer is being operated in
+        :return [dataloaders, size]
         """
-        #append the npz extensions
-        train_path = bc_config.EXPERT.train_path + ".npz"
-        val_path = bc_config.EXPERT.val_path + ".npz"
-
+        path = os.path.join(
+                bc_config.EXPERT.dataset_path.format(split = phase), 
+                "expert_trajectories.h5"
+            )
+        batch_size = bc_config.BC.batch_size
+        
         #create instances of the ExpertDataset
-        image_datasets = {x: ExpertDataset(y) for (x,y) in [('train',train_path), ('val',val_path)]}
+        image_dataset = ExpertDataset(path, batch_size)
+        size_of_dataset = image_dataset.entries
+
+        if (image_dataset.batch_size != bc_config.BC.batch_size):
+            logger.info("ERROR, batch size is bigger than the dataset\
+                ,updating the batch_size to be {}".format(image_dataset.batch_size))
+            batch_size = image_dataset.batch_size
         
-        dataloaders = {x: DataLoader(image_datasets[x], 
-                        batch_size=bc_config.BC.batch_size, 
-                        shuffle=bc_config.BC.shuffle, 
-                        num_workers=bc_config.BC.num_workers
-                    ) for x in ['train', 'val']
-            }
+        dataloader = DataLoader(image_dataset, 
+                        batch_size=batch_size, 
+                        num_workers=bc_config.BC.num_workers, 
+                        pin_memory=bc_config.BC.pin_memory,
+                        collate_fn = collate_fn
+                    )
                 
-        return dataloaders
-
-    def _get_size_dataset(self, bc_config=None):
-        r"""Gets the size of the datasets for calculating epoch stats
-
-        Args:
-            bc_config: config node with the relevant params for behavioral cloning
-
-        Returns:
-            Dict(str, int): contains the size of the train and val folders
-        """
-        
-        train_path = bc_config.EXPERT.train_path + ".npz"
-        val_path = bc_config.EXPERT.val_path + ".npz"
-
-        return {
-            "train_size": len(np.load(train_path)['rgb']),
-            "val_size": len(np.load(val_path)['rgb'])
-        }
+        return [dataloader, size_of_dataset]
 
     @staticmethod
-    def _exp_lr_scheduler(optimizer, epoch, init_lr=0.0008, lr_decay_epoch=10):
+    def _exp_lr_scheduler(optimizer, 
+        epoch, 
+        init_lr=0.0008, 
+        lr_decay_epoch=10
+    ):
         r"""Decay learning rate by a factor of 0.1 every lr_decay_epoch epochs
 
-        Args:
-            optimizer: Optimizer used to optimize the policy model  
-            epoch: The current epoch of the training process
-            init_lr: Learning rate at which the training process starts off
-            lr_decay_epoch: Number of epochs before the learning rate starts decaying
-
-        Returns:
-            optimizer: Model parameters with the updated learning rate 
+        :param optimizer: Optimizer used to optimize the policy model  
+        :param epoch: The current epoch of the training process
+        :param init_lr: Learning rate at which the training process starts off
+        :param lr_decay_epoch: Number of epochs before the learning rate starts decaying
+        :return optimizer: Model parameters with the updated learning rate 
         """
-        
         lr = init_lr * (0.1**(epoch // lr_decay_epoch))
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
         return optimizer
 
-    #taken from the BaseRLTrainer class
-    def _setup_eval_config(self, checkpoint_config: Config) -> Config:
-        r"""Sets up and returns a merged config for evaluation. Config
-            object saved from checkpoint is merged into config file specified
-            at evaluation time with the following overwrite priority:
-                  eval_opts > ckpt_opts > eval_cfg > ckpt_cfg
-            If the saved config is outdated, only the eval config is returned.
+    @staticmethod
+    def generate_splits(num_episodes, 
+        iteration_split
+    ):
+        r""" Splits the total number of episodes into a list over which the generation/training 
+        cycles iterate over
 
-        Args:
-            checkpoint_config: saved config from checkpoint.
-
-        Returns:
-            Config: merged config for eval.
+        :param num_episodes: Integer. Total number of episodes for which the generation/training 
+            cycles shall be carried out
+        :param iteration_split: Integer. Number of episodes that will be used in one generation/training
+            cycle
+        :return t_iterations: List object. sum(t_iterations) = num_episodes
         """
-
-        config = self.config.clone()
-
-        ckpt_cmd_opts = checkpoint_config.CMD_TRAILING_OPTS
-        eval_cmd_opts = config.CMD_TRAILING_OPTS
-
-        try:
-            config.merge_from_other_cfg(checkpoint_config)
-            config.merge_from_other_cfg(self.config)
-            config.merge_from_list(ckpt_cmd_opts)
-            config.merge_from_list(eval_cmd_opts)
-        except KeyError:
-            logger.info("Saved config is outdated, using solely eval config")
-            config = self.config.clone()
-            config.merge_from_list(eval_cmd_opts)
-        if config.TASK_CONFIG.DATASET.SPLIT == "train":
-            config.TASK_CONFIG.defrost()
-            config.TASK_CONFIG.DATASET.SPLIT = "val"
-
-        config.TASK_CONFIG.SIMULATOR.AGENT_0.SENSORS = self.config.SENSORS
-        config.freeze()
-
-        return config
+        splits = num_episodes // iteration_split
+        leftovers = num_episodes % iteration_split
+        t_iterations = np.asarray([iteration_split for x in range(splits)], dtype = np.int32)
+        
+        if (leftovers != 0): t_iterations = np.append(t_iterations, leftovers)
+        return t_iterations
 
     def train(self) -> None:
         r"""Trains the policy on the expert trajectories using the model utilities set in 
         the config.
 
-        Args:
-            None
-
-        Returns:
-            None 
+        :return None
         """
+        #initialize the common environment to use in this cycle
+        dataset = make_dataset(self.config.TASK_CONFIG.DATASET.TYPE, 
+                                    config = self.config.TASK_CONFIG.DATASET)
+        env_class = get_env_class(self.config.ENV_NAME)
+        self.env = env_class(config=self.config, dataset=dataset)
 
-        self.envs = construct_envs(self.config, 
-                                    get_env_class(self.config.ENV_NAME)
-                                )
+        logger.info("Initializing the expert agent")
+        self.expert = Expert_Model(self.config, self.env)
+        expert_config = self.config.IMITATION.EXPERT
+        expert_dict = dict()
 
-        #bc_config is the specific config for the algorithm
+        #get the relevant varibles for initializing the training protocol
+        num_episodes = expert_config.num_episodes
+        split_dataset = expert_config.split_dataset
+        iteration_split = expert_config.iteration_split
+
+        #this uses the entire dataset    
+        if(num_episodes == -1):
+            num_episodes = len(dataset.episodes)
+
+        #create an iterations list from the number of training episodes
+        training_episodes = int(split_dataset*num_episodes)
+        t_iterations = self.generate_splits(training_episodes, iteration_split)
+        expert_dict['train'] = t_iterations
+
+        #training dataset is being created, create folders if they don't exist
+        image_path_train = expert_config.dataset_path.format(split = "train")
+        self.expert.sanity_check(image_path_train)
+
+        #create an iterations list if the split_dataset has been set
+        validation_episodes = int(num_episodes - training_episodes)
+        if(validation_episodes != 0):
+            v_iterations = self.generate_splits(validation_episodes, iteration_split)
+            expert_dict['val'] = v_iterations
+            image_path_val = expert_config.dataset_path.format(split = "val")
+            self.expert.sanity_check(image_path_val)
+
+        #bc_config is the config node specific to the algorithm
         bc_config = self.config.IMITATION
-        
-        dataloaders = self._get_dataloaders(bc_config)
-        sizes = self._get_size_dataset(bc_config)
 
-        #create the checkpoint folder if it doesn't exist
-        if not os.path.isdir(self.config.CHECKPOINT_FOLDER):
-            os.makedirs(self.config.CHECKPOINT_FOLDER)
+        #loop over the train/val sets
+        for phase, iterations_list in expert_dict.items():
 
-        #initialize the agent
-        self._setup_agent(self.config)
-        self.agent.to(self.device)
+            if(phase == 'train'): logger.info("Running the training-generation cycles")
+            elif(phase == 'val'): logger.info("Generating a validation set to test the agent")
 
-        logger.info(
-            "agent number of parameters: {}".format(
-                sum(param.numel() for param in self.agent.parameters())
-            )
-        )
+            for iterations in iterations_list:
 
-        #model_utils
-        optimizer_ft = optim.Adam(self.agent.net.parameters(), 
-                                lr=bc_config.BC.learning_rate, 
-                                weight_decay= bc_config.BC.weight_decay,
-                                eps= bc_config.BC.eps
-                            )
+                #generate the expert trajectories
+                self.expert.generate_expert_trajectory(phase, iterations, expert_config.dataset_path, logger)
 
-        criterion = nn.CrossEntropyLoss()
-        num_epochs = bc_config.BC.num_epochs
-        
-        logger.info(
-            "Number of epochs used for training the policy: {}".format(
-                num_epochs    
-            )
-        )
-        
-        #get the network
-        model = self.agent.net
-        logger.info(f"The model architecture of the policy is: {model}")
+                #train the agent on these aggregated datasets
+                if(phase == 'train'):
+                    #set to True if there exists a trained model at the specified path
+                    load_dict_exists = False
 
-        with TensorboardWriter(
-            self.config.TENSORBOARD_DIR
-        ) as writer:
+                    dataloader, size = self._get_dataloaders_size_dataset(bc_config, "train")
 
-            print ("Training the policy on the expert trajectory")
-            for epoch in tqdm(range(num_epochs)):
-                
-                #Schedule the learning rate every 10 epochs
-                optimizer_ft = self._exp_lr_scheduler(optimizer_ft, epoch, bc_config.BC.learning_rate)
+                    #create the checkpoint folder if it doesn't exist
+                    if not os.path.isdir(self.config.CHECKPOINT_FOLDER):
+                        #gets called the first time the training-generation cycle runs
+                        os.makedirs(self.config.CHECKPOINT_FOLDER)
 
-                running_loss = 0.0
-                running_corrects = 0
+                    #prior model file exists; called in other iterations
+                    if os.path.isfile(os.path.join(self.config.CHECKPOINT_FOLDER, "policy_model.pth")):
+                        load_dict = self.load_checkpoint(checkpoint_path=self.config.CHECKPOINT_FOLDER, 
+                                                        checkpoint_index = -1,   
+                                                        map_location="cpu"
+                                                    )
+                        load_dict_exists = True
 
-                start_time = time.time()
-                
-                for sample in dataloaders['train']:
-                    
-                    expert_actions = sample['action']
-                    expert_actions = expert_actions.to(self.device)
-                    
-                    # zero the parameter gradients
-                    optimizer_ft.zero_grad()
 
-                    outputs = model(sample, self.device)
-                    _ , preds = torch.max(outputs, 1)
+                    #initialize the agent/load the agent
+                    self._setup_agent(self.config)
+                    if (load_dict_exists): self.agent.load_state_dict(load_dict["state_dict"]) 
+                    self.agent.to(self.device)
 
-                    loss = criterion(outputs, expert_actions)
-
-                    loss.backward()
-                    optimizer_ft.step()
-
-                    # statistics
-                    running_loss += loss.item() * expert_actions.size(0)
-                    running_corrects += torch.sum(preds == expert_actions.data)
-
-                    del loss
-                    del preds
-                    del outputs
-                    del expert_actions
-                    del sample
-
-                #save checkpoints every 5 epochs
-                if (epoch!= 0 and (epoch+1)%5 == 0):
-                    self.save_checkpoint(f"checkpoint_{epoch+1}.pth")   
-                    
-                #Epoch stats 
-                epoch_loss = running_loss / sizes['train_size']
-                epoch_accuracy = running_corrects/ sizes['train_size']
-
-                #Final epoch stats
-                logger.info(
-                        "Epoch_number: {}\tepoch_loss:{:.3f}\tepoch_accuracy:{}\ttime_taken:{:.3f}".format(
-                            epoch+1, 
-                            epoch_loss, 
-                            epoch_accuracy,
-                            time.time() - start_time
+                    if (not load_dict_exists): logger.info(
+                        "agent number of parameters: {}".format(
+                            sum(param.numel() for param in self.agent.parameters())
                         )
                     )
 
-        #use the function to save the final model
-        del epoch_loss
-        del epoch_accuracy
+                    #model_utils
+                    optimizer_ft = optim.Adam(self.agent.net.parameters(), 
+                                            lr=bc_config.BC.learning_rate, 
+                                            weight_decay= bc_config.BC.weight_decay,
+                                            eps= bc_config.BC.eps
+                                        )
 
-        self.save_checkpoint("policy_model.pth")  
-        self.envs.close()  
-        
-    def validate(self, checkpoint_index:int = -1) -> None:
+                    criterion = nn.CrossEntropyLoss()
+                    num_epochs = bc_config.BC.num_epochs
+                    
+                    logger.info(
+                        "Number of epochs used for training the policy: {}".format(
+                            num_epochs    
+                        )
+                    )
+                    
+                    #get the network
+                    model = self.agent.net
+                    if (not load_dict_exists): logger.info(f"The model architecture of the policy is: {model}")
+
+                    with TensorboardWriter(
+                        self.config.TENSORBOARD_DIR
+                    ) as writer:
+
+                        print ("Training the policy on the expert trajectories collected")
+                        for epoch in tqdm(range(num_epochs)):
+                            
+                            #Schedule the learning rate every 10 epochs
+                            optimizer_ft = self._exp_lr_scheduler(optimizer_ft, epoch, bc_config.BC.learning_rate)
+
+                            running_loss = 0.0
+                            running_corrects = 0
+
+                            start_time = time.time()
+                            
+                            for sample in dataloader:
+                                
+                                expert_actions = sample['action']
+                                expert_actions = expert_actions.to(self.device, non_blocking=True)
+                                
+                                # zero the parameter gradients
+                                optimizer_ft.zero_grad()
+
+                                outputs = model(sample, self.device)
+                                _ , preds = torch.max(outputs, 1)
+
+                                loss = criterion(outputs, expert_actions)
+
+                                loss.backward()
+                                optimizer_ft.step()
+
+                                # statistics
+                                running_loss += loss.item() * expert_actions.size(0)
+                                running_corrects += torch.sum(preds == expert_actions.data)
+
+                                del loss
+                                del preds
+                                del outputs
+                                del expert_actions
+                                del sample
+
+                            #save checkpoints every 5 epochs
+                            if (epoch!= 0 and (epoch+1)% bc_config.checkpoint_interval == 0):
+                                self.save_checkpoint(f"checkpoint_{epoch+1}.pth")   
+                                
+                            #Epoch stats 
+                            epoch_loss = running_loss / size
+                            epoch_accuracy = running_corrects/ size
+
+                            #Final epoch stats
+                            logger.info(
+                                    "Epoch_number: {}\tepoch_loss:{:.3f}\tepoch_accuracy:{}\ttime_taken:{:.3f}".format(
+                                        epoch+1, 
+                                        epoch_loss, 
+                                        epoch_accuracy,
+                                        time.time() - start_time
+                                    )
+                                )
+
+                    #use the function to save the final model
+                    del epoch_loss
+                    del epoch_accuracy
+
+                    self.save_checkpoint("policy_model.pth")
+
+                #run validation if appropriate
+                elif(phase == 'val'): 
+                    self.validate()    
+
+        return      
+    
+    def validate(self, 
+        checkpoint_index:int = -1
+    ) -> None:
         r"""Test the policy model on a held out test set to maintain consistency with the idea of 
         simplifying the general imitation learning problem to a supervised learning problem
         
-        Args:
-            None
-
-        Returns:
-            None
-        """
+        :param checkpoint_index: Integer. Default value = -1. Uses a policy defined by the model stored
+            in that particular checkpoint. Using the default value uses a policy defined by the model 
+            generated after the entire training process 
+        :return None 
+        """   
         #bc_config is the specific config for the algorithm
-        self.envs = construct_envs(self.config, get_env_class(self.config.ENV_NAME))
-
         bc_config = self.config.IMITATION
 
         if(checkpoint_index == -1):
@@ -320,8 +396,7 @@ class BCTrainer(BaseTrainer):
                                             map_location="cpu"
                                         )
                
-        dataloaders = self._get_dataloaders(bc_config)
-        sizes = self._get_size_dataset(bc_config)
+        dataloader, size = self._get_dataloaders_size_dataset(bc_config, "val")
         criterion = nn.CrossEntropyLoss()
 
         #setup the model
@@ -342,7 +417,7 @@ class BCTrainer(BaseTrainer):
 
             start_time = time.time()
             
-            for sample in dataloaders['val']:
+            for sample in dataloader:
                 
                 expert_actions = sample['action']
                 expert_actions = expert_actions.to(self.device)
@@ -350,7 +425,6 @@ class BCTrainer(BaseTrainer):
                 outputs = model(sample, self.device)
                 loss = criterion(outputs, expert_actions)
                 _ , preds = torch.max(outputs, 1)
-
 
                 # statistics
                 running_loss += loss.item() * expert_actions.size(0)
@@ -362,8 +436,8 @@ class BCTrainer(BaseTrainer):
                 del sample
   
             #Epoch stats
-            val_loss = running_loss/sizes['val_size'] 
-            val_accuracy = running_corrects/ sizes['val_size']
+            val_loss = running_loss/size
+            val_accuracy = running_corrects/ size
 
             #print this out to the console
             logger.info("Validation stats here")
@@ -378,19 +452,23 @@ class BCTrainer(BaseTrainer):
         #use the function to save the final model
         del val_loss
         del val_accuracy
-        self.envs.close()
 
-    def eval(self, checkpoint_index:int = -1) -> None:
+        return
+
+    def eval_checkpoint(
+        self,
+        checkpoint_path: str,
+        writer = TensorboardWriter,
+        checkpoint_index: int = -1
+    ) -> None:
         r"""Tests the algorithm in a free environment
 
-        Args:
-            checkpoint_index: The index used to load the model policy in a free environment. Default value of
-            -1 indicates loading the final trained model. 
-
-        Returns: None
-        
+        :param checkpoint_path:
+        :param writer:
+        :param checkpoint_index: The index used to load the model policy in a free environment. 
+            Default value of -1 indicates loading the final trained model. 
+        :return None
         """
-
         if(checkpoint_index == -1):
             logger.info("Loading the final model to use as a part of the policy of the agent")
         
@@ -591,6 +669,7 @@ class BCTrainer(BaseTrainer):
             )
 
         self.envs.close()
+        return
 
     @staticmethod
     def _pause_envs(
@@ -620,14 +699,13 @@ class BCTrainer(BaseTrainer):
             rgb_frames
         )
 
-    def save_checkpoint(self, file_name:str) -> None:
-        r"""Save checkpoint with specified name.
+    def save_checkpoint(self, 
+        file_name:str
+    ) -> None:
+        r"""Save the checkpoint with a specified name.
 
-        Args:
-            file_name: file name for checkpoint
-
-        Returns:
-            None
+        :param file_name: String object. The file name to be used for the checkpoint
+        :return None
         """
         checkpoint = {
             "state_dict": self.agent.state_dict(),
@@ -637,17 +715,22 @@ class BCTrainer(BaseTrainer):
             checkpoint, os.path.join(self.config.CHECKPOINT_FOLDER, file_name)
         )
 
+        return
 
-    def load_checkpoint(self, checkpoint_path:str, checkpoint_index: int = -1, *args, **kwargs) -> Dict:
+
+    def load_checkpoint(self, 
+        checkpoint_path:str, 
+        checkpoint_index: int = -1, 
+        *args, 
+        **kwargs
+    ) -> Dict:
         r"""Loads the specified checkpoint (saved during the training process) into memory
 
-        Args: 
-            checkpoint_path: Path to the folder where the checkpoints are stored
-            checkpoint_index: The index 
+        :param checkpoint_path: String object. Path to the folder where the checkpoints are stored
+        :param checkpoint_index: Integer. The index of the checkpoint that will be loaded 
 
-        Returns:
-            A Dictionary instance that has the state_dict and config file saved for that particular
-            checkpoint
+        :return ckpt_dict: Dictionary object. A dictionary instance that has the state_dict and the 
+        config file saved for that particular checkpoint
         """
         #checkpoint=-1 indicates that you want to load the final trained model
         if (checkpoint_index == -1):
@@ -655,5 +738,5 @@ class BCTrainer(BaseTrainer):
 
         else:
             checkpoint_path = os.path.join(checkpoint_path , "checkpoint_" + str(checkpoint_index) + ".pth")
-        
+
         return torch.load(checkpoint_path, *args, **kwargs)

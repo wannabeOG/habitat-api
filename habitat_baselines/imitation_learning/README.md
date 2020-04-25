@@ -45,8 +45,7 @@ imitation_learning
 1. ***num_episodes***: Number of episodes that the expert will interact with the environment with for
 1. ***split_dataset***: A floating point value between 0 and 1 which decides the number of episodes that will be used to create the training set
 1. ***record_images***: A boolean that if set indicates that you would like to store the images to disk. Setting this flag will then result in the model reading images off the disk on the fly and not load the entire dataset into memory at the same time
-1. ***train_path***: Path where the train dataset is stored at. The path is terminated with the file name ("expert_trajectories_train" in the default case)
-1. ***val_path***: Path where the train dataset is stored at. The path is terminated with the file name ("expert_trajectories_val" in the default case)
+1. ***path***: Path where the dataset of expert trajectories (train/val) is stored at. 
 1. ***log_file***: Name of the log file
 
 ```IMITATION.BC``` is a record of the attributes required to train a policy using Behavioral Cloning
@@ -62,13 +61,13 @@ Optimizer attributes (Check the docs linked above for more information):
 Dataloader attributes:
 
 1. ***batch_size***: Batch size used whilst loading the data from the dataset
-1. ***shuffle***: set to True to have the data reshuffled at every epoch
 1. ***num_workers***: how many subprocesses to use for data loading. 0 means that the data will be loaded in the main process
 
 Check [here][17] for more information
 
 1. ***num_epochs***: Number of epochs you wish to run the training process for
 1. ***hidden_size***: The [output size][13] of the final linear layer used in the CNN model  
+1. ***checkpoint_interval***: A checkpoint will be stored at the appropriate location every "checkpoint_interval
 
 ### Model Architecture Used
 
@@ -97,23 +96,11 @@ ModifiedCNN(
 ```compass_mlp``` is a linear layer that is used if the agent is equipped with a (gps+compass) sensor  
 ```mlp``` is a linear layer used in the case if the agent does not have the above facility
 
-**Generate Expert Trajectories**
+**Generate Expert Trajectories and Train and Validate the Policy on them**
 
-```bash
-python -u habitat_baselines/run_test.py --exp-config habitat_baselines/config/pointnav/bc_pointnav.yaml --run-type generate
-```
-
-**Train**
 ```bash
 python -u habitat_baselines/run_test.py --exp-config habitat_baselines/config/pointnav/bc_pointnav.yaml --run-type train
 ```
-
-**Validate**
-```bash
-python -u habitat_baselines/run_test.py --exp-config habitat_baselines/config/pointnav/bc_pointnav.yaml --run-type validate
---checkpoint-number ()
-```
-Checkpoint number is used to load the model from a specific checkpoint created during the training routine of the policy. If this field is left empty, the final checkpoint is used 
 
 **Test**
 ```bash

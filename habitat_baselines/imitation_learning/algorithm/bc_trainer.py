@@ -82,6 +82,14 @@ class BCTrainer(BaseRLTrainer):
         self.agent = None
         self.env = None
         self.expert = None
+        
+        #add sensors
+        config.defrost()
+        config.TASK_CONFIG.TASK.MEASUREMENTS.append("TOP_DOWN_MAP")
+        config.TASK_CONFIG.TASK.SENSORS.append("HEADING_SENSOR")
+        config.TASK_CONFIG.SIMULATOR.AGENT_0.SENSORS.append("DEPTH_SENSOR")
+        config.freeze()
+        
         self.config = config
         self.device = (
             torch.device("cuda", self.config.TORCH_GPU_ID)

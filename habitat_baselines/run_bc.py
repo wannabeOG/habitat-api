@@ -62,14 +62,7 @@ def run_exp(exp_config: str, run_type: str, checkpoint_number:int = -1, opts=Non
     config = get_config(exp_config, opts)
     random.seed(config.TASK_CONFIG.SEED)
     np.random.seed(config.TASK_CONFIG.SEED)
-
-    #add sensors
-    config.defrost()
-    config.TASK_CONFIG.TASK.MEASUREMENTS.append("TOP_DOWN_MAP")
-    config.TASK_CONFIG.TASK.SENSORS.append("HEADING_SENSOR")
-    config.TASK_CONFIG.SIMULATOR.AGENT_0.SENSORS.append("DEPTH_SENSOR")
-    config.freeze()
-
+       
     trainer = BCTrainer(config)
         
     if run_type == "train":

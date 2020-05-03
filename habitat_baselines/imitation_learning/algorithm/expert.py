@@ -95,8 +95,7 @@ class Expert_Model:
             meta = h.create_dataset('metadata', data=json.dumps(meta_dict, cls = NumpyArrayEncoder))
             del meta_dict
 
-
-        return
+         return
 
     def generate_expert_trajectory(self, 
         phase:str, 
